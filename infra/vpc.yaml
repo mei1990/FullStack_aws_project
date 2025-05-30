@@ -1,0 +1,356 @@
+# This CloudFormation template creates two Virtual Private Clouds (VPCs) with CIDR blocks 10.10.0.0/16 and 10.11.0.0/16.
+# Each VPC has three public subnets and three private subnets distributed across three availability zones.
+# The template also includes the following resources:
+# 
+# 1. Internet Gateways (IGWs) for each VPC:
+#    - IGWForVPCA: Internet Gateway for VPC A.
+#    - IGWForVPCB: Internet Gateway for VPC B.
+# 
+# 2. VPC Gateway Attachments:
+#    - AttachIGWToVPCA: Attaches IGWForVPCA to VPCA.
+#    - AttachIGWToVPCB: Attaches IGWForVPCB to VPCB.
+# 
+# 3. Route Tables:
+#    - PublicRouteTableVPCA: Public route table for VPCA.
+#    - PublicRouteTableVPCB: Public route table for VPCB.
+#    - PrivateRouteTableVPCA: Private route table for VPCA.
+#    - PrivateRouteTableVPCB: Private route table for VPCB.
+# 
+# 4. Routes:
+#    - PublicRouteVPCA: Adds a route to PublicRouteTableVPCA for internet access via IGWForVPCA.
+#    - PublicRouteVPCB: Adds a route to PublicRouteTableVPCB for internet access via IGWForVPCB.
+# 
+# 5. Subnets:
+#    - Public subnets for VPCA: PublicSubnetA1, PublicSubnetA2, PublicSubnetA3.
+#    - Private subnets for VPCA: PrivateSubnetA1, PrivateSubnetA2, PrivateSubnetA3.
+#    - Public subnets for VPCB: PublicSubnetB1, PublicSubnetB2, PublicSubnetB3.
+#    - Private subnets for VPCB: PrivateSubnetB1, PrivateSubnetB2, PrivateSubnetB3.
+# 
+# 6. Subnet Route Table Associations:
+#    - Associates public subnets with public route tables for both VPCA and VPCB.
+#    - Associates private subnets with private route tables for both VPCA and VPCB.
+# 
+# Tags are applied to resources for identification, including Name and Application tags.
+#create two vpc with 10.10.0.0/16 & 10.11.0.0/16n in cfn yaml
+Resources:
+  VPCA:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: '10.10.0.0/16'
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: 'VPC-A'
+        - Key: 'Application'
+          Value: 'FullStack'
+        - key: Environment
+          Value: 'Development'
+  VPCB:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: '10.11.0.0/16'
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: 'VPC-B'
+        - Key: 'Application'
+          Value: 'FullStack'
+# Create three private and public subnets for each VPC
+
+ # Internet Gateways
+  IGWForVPCA:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: IGW-VPCA
+        - Key: Application
+          Value: FullStack
+  IGWForVPCB:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: IGW-VPCB
+        - Key: Application
+          Value: FullStack
+
+  # Attach IGWs to VPCs
+  AttachIGWToVPCA:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPCA
+      InternetGatewayId: !Ref IGWForVPCA
+  AttachIGWToVPCB:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPCB
+      InternetGatewayId: !Ref IGWForVPCB
+
+  # Public Route Tables
+  PublicRouteTableVPCA:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPCA
+      Tags:
+        - Key: Name
+          Value: VPCA-Public-RT
+        - Key: Application
+          Value: FullStack
+  PublicRouteTableVPCB:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPCB
+      Tags:
+        - Key: Name
+          Value: VPCB-Public-RT
+        - Key: Application
+          Value: FullStack
+
+  # Private Route Tables
+  PrivateRouteTableVPCA:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPCA
+      Tags:
+        - Key: Name
+          Value: VPCA-Private-RT
+        - Key: Application
+          Value: FullStack
+  PrivateRouteTableVPCB:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPCB
+      Tags:
+        - Key: Name
+          Value: VPCB-Private-RT
+        - Key: Application
+          Value: FullStack
+
+  # Public Routes
+  PublicRouteVPCA:
+    Type: AWS::EC2::Route
+    DependsOn: AttachIGWToVPCA
+    Properties:
+      RouteTableId: !Ref PublicRouteTableVPCA
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref IGWForVPCA
+  PublicRouteVPCB:
+    Type: AWS::EC2::Route
+    DependsOn: AttachIGWToVPCB
+    Properties:
+      RouteTableId: !Ref PublicRouteTableVPCB
+      DestinationCidrBlock: '0.0.0.0/0'
+      GatewayId: !Ref IGWForVPCB
+
+  # Public Subnets for VPC A
+  PublicSubnetA1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPCA
+      CidrBlock: '10.10.0.0/24'
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: VPCA-Public-Subnet-1
+        - Key: Application
+          Value: FullStack
+  PublicSubnetA2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPCA
+      CidrBlock: '10.10.1.0/24'
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: VPCA-Public-Subnet-2
+        - Key: Application
+          Value: FullStack
+  PublicSubnetA3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPCA
+      CidrBlock: '10.10.2.0/24'
+      AvailabilityZone: !Select [2, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: VPCA-Public-Subnet-3
+        - Key: Application
+          Value: FullStack
+
+  # Private Subnets for VPC A
+  PrivateSubnetA1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPCA
+      CidrBlock: '10.10.3.0/24'
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: VPCA-Private-Subnet-1
+        - Key: Application
+          Value: FullStack
+  PrivateSubnetA2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPCA
+      CidrBlock: '10.10.4.0/24'
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: VPCA-Private-Subnet-2
+        - Key: Application
+          Value: FullStack
+  PrivateSubnetA3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPCA
+      CidrBlock: '10.10.5.0/24'
+      AvailabilityZone: !Select [2, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: VPCA-Private-Subnet-3
+        - Key: Application
+          Value: FullStack
+
+  # Public Subnets for VPC B
+  PublicSubnetB1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPCB
+      CidrBlock: '10.11.0.0/24'
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: VPCB-Public-Subnet-1
+        - Key: Application
+          Value: FullStack
+  PublicSubnetB2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPCB
+      CidrBlock: '10.11.1.0/24'
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: VPCB-Public-Subnet-2
+        - Key: Application
+          Value: FullStack
+  PublicSubnetB3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPCB
+      CidrBlock: '10.11.2.0/24'
+      AvailabilityZone: !Select [2, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: VPCB-Public-Subnet-3
+        - Key: Application
+          Value: FullStack
+
+  # Private Subnets for VPC B
+  PrivateSubnetB1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPCB
+      CidrBlock: '10.11.3.0/24'
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: VPCB-Private-Subnet-1
+        - Key: Application
+          Value: FullStack
+  PrivateSubnetB2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPCB
+      CidrBlock: '10.11.4.0/24'
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: VPCB-Private-Subnet-2
+        - Key: Application
+          Value: FullStack
+  PrivateSubnetB3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPCB
+      CidrBlock: '10.11.5.0/24'
+      AvailabilityZone: !Select [2, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: VPCB-Private-Subnet-3
+        - Key: Application
+          Value: FullStack
+
+  # Associate Public Subnets with Public Route Tables
+  PublicSubnetA1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA1
+      RouteTableId: !Ref PublicRouteTableVPCA
+  PublicSubnetA2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA2
+      RouteTableId: !Ref PublicRouteTableVPCA
+  PublicSubnetA3RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA3
+      RouteTableId: !Ref PublicRouteTableVPCA
+  PublicSubnetB1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB1
+      RouteTableId: !Ref PublicRouteTableVPCB
+  PublicSubnetB2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB2
+      RouteTableId: !Ref PublicRouteTableVPCB
+  PublicSubnetB3RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB3
+      RouteTableId: !Ref PublicRouteTableVPCB
+
+  # Associate Private Subnets with Private Route Tables
+  PrivateSubnetA1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetA1
+      RouteTableId: !Ref PrivateRouteTableVPCA
+  PrivateSubnetA2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetA2
+      RouteTableId: !Ref PrivateRouteTableVPCA
+  PrivateSubnetA3RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetA3
+      RouteTableId: !Ref PrivateRouteTableVPCA
+  PrivateSubnetB1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetB1
+      RouteTableId: !Ref PrivateRouteTableVPCB
+  PrivateSubnetB2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetB2
+      RouteTableId: !Ref PrivateRouteTableVPCB
+  PrivateSubnetB3RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetB3
+      RouteTableId: !Ref PrivateRouteTableVPCB
