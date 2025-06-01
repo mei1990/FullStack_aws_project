@@ -44,7 +44,7 @@ Resources:
           Value: 'VPC-A'
         - Key: 'Application'
           Value: 'FullStack'
-        - key: Environment
+        - Key: Environment
           Value: 'Development'
   VPCB:
     Type: AWS::EC2::VPC
@@ -354,3 +354,49 @@ Resources:
     Properties:
       SubnetId: !Ref PrivateSubnetB3
       RouteTableId: !Ref PrivateRouteTableVPCB
+
+Outputs:
+  VPCAID:
+    Description: ID of VPC A
+    Value: !Ref VPCA
+    Export:
+      Name: VPCAID
+  VPCBID:
+    Description: ID of VPC B
+    Value: !Ref VPCB
+    Export:
+      Name: VPCBID
+  
+  # Export Public Subnet IDs for VPC A
+  PublicSubnetA1ID:
+    Description: ID of Public Subnet 1 in VPC A
+    Value: !Ref PublicSubnetA1
+    Export:
+      Name: PublicSubnet1
+  PublicSubnetA2ID:
+    Description: ID of Public Subnet 2 in VPC A
+    Value: !Ref PublicSubnetA2
+    Export:
+      Name: PublicSubnet2
+  PublicSubnetA3ID:
+    Description: ID of Public Subnet 3 in VPC A
+    Value: !Ref PublicSubnetA3
+    Export:
+      Name: PublicSubnet3
+  
+  # Export Private Subnet IDs for VPC A
+  PrivateSubnetA1ID:
+    Description: ID of Private Subnet 1 in VPC A
+    Value: !Ref PrivateSubnetA1
+    Export:
+      Name: PrivateSubnet1
+  PrivateSubnetA2ID:
+    Description: ID of Private Subnet 2 in VPC A
+    Value: !Ref PrivateSubnetA2
+    Export:
+      Name: PrivateSubnet2
+  PrivateSubnetA3ID:
+    Description: ID of Private Subnet 3 in VPC A
+    Value: !Ref PrivateSubnetA3
+    Export:
+      Name: PrivateSubnet3

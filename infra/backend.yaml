@@ -1,0 +1,267 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: ECS Fargate service for backend with RDS PostgreSQL database
+
+Resources:
+  # Backend Security Group
+  BackendSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for backend service
+      VpcId:
+        Fn::ImportValue: VPCAID
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5000
+          ToPort: 5000
+          SourceSecurityGroupId:
+            Fn::ImportValue: FrontendSG
+      Tags:
+        - Key: Name
+          Value: Backend-SG
+        - Key: Application
+          Value: FullStack
+
+  # Database Security Group
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for PostgreSQL database
+      VpcId:
+        Fn::ImportValue: VPCAID
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref BackendSecurityGroup
+      Tags:
+        - Key: Name
+          Value: Database-SG
+        - Key: Application
+          Value: FullStack
+
+  # RDS Subnet Group
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for PostgreSQL database
+      SubnetIds:
+        - Fn::ImportValue: PrivateSubnet1
+        - Fn::ImportValue: PrivateSubnet2
+        - Fn::ImportValue: PrivateSubnet3
+      Tags:
+        - Key: Name
+          Value: DB-Subnet-Group
+        - Key: Application
+          Value: FullStack
+
+  # RDS PostgreSQL Instance
+  PostgreSQLDB:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBName: appdb
+      AllocatedStorage: 20
+      DBInstanceClass: db.t3.micro
+      Engine: postgres
+      EngineVersion: 13.7
+      MasterUsername: postgres
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${PostgreSQLSecret}:SecretString:password}}'
+      MultiAZ: false
+      StorageType: gp2
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !Ref DatabaseSecurityGroup
+      Tags:
+        - Key: Name
+          Value: PostgreSQL-DB
+        - Key: Application
+          Value: FullStack
+    DeletionPolicy: Snapshot
+
+  # Database Credentials Secret
+  PostgreSQLSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: PostgreSQLCredentials
+      Description: RDS PostgreSQL credentials
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "postgres"}'
+        GenerateStringKey: password
+        PasswordLength: 16
+        ExcludeCharacters: '"@/\'
+
+  # ECS Cluster
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: backend-cluster
+      CapacityProviders:
+        - FARGATE
+        - FARGATE_SPOT
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE
+          Weight: 1
+
+  # Log Group for Container Logs
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/backend
+      RetentionInDays: 30
+
+  # Task Execution Role
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  # Task Role with Secrets Access
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SecretsAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref PostgreSQLSecret
+
+  # Task Definition
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: backend-task
+      Cpu: '256'
+      Memory: '512'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: backend-container
+          Image: ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/backend:latest
+          Essential: true
+          PortMappings:
+            - ContainerPort: 5000
+              HostPort: 5000
+              Protocol: tcp
+          Environment:
+            - Name: DB_HOST
+              Value: !GetAtt PostgreSQLDB.Endpoint.Address
+            - Name: DB_PORT
+              Value: !GetAtt PostgreSQLDB.Endpoint.Port
+            - Name: DB_NAME
+              Value: appdb
+            - Name: DB_USER
+              Value: postgres
+          Secrets:
+            - Name: DB_PASSWORD
+              ValueFrom: !Sub '${PostgreSQLSecret}:password::'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: backend
+
+  # Load Balancer
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: backend-lb
+      Scheme: internal
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: '60'
+      Subnets:
+        - Fn::ImportValue: PrivateSubnet1
+        - Fn::ImportValue: PrivateSubnet2
+      SecurityGroups:
+        - !Ref BackendSecurityGroup
+
+  # Target Group
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: backend-tg
+      Port: 5000
+      Protocol: HTTP
+      TargetType: ip
+      VpcId:
+        Fn::ImportValue: VPCAID
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 3
+      UnhealthyThresholdCount: 3
+
+  # Listener
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 5000
+      Protocol: HTTP
+
+  # ECS Service
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: Listener
+    Properties:
+      ServiceName: backend-service
+      Cluster: !Ref ECSCluster
+      LaunchType: FARGATE
+      DesiredCount: 2
+      TaskDefinition: !Ref TaskDefinition
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups:
+            - !Ref BackendSecurityGroup
+          Subnets:
+            - Fn::ImportValue: PrivateSubnet1
+            - Fn::ImportValue: PrivateSubnet2
+      LoadBalancers:
+        - ContainerName: backend-container
+          ContainerPort: 5000
+          TargetGroupArn: !Ref TargetGroup
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+      HealthCheckGracePeriodSeconds: 60
+
+Outputs:
+  DatabaseEndpoint:
+    Description: PostgreSQL database endpoint
+    Value: !GetAtt PostgreSQLDB.Endpoint.Address
+  BackendLoadBalancerDNS:
+    Description: DNS name of the backend load balancer
+    Value: !GetAtt LoadBalancer.DNSName
+    Export:
+      Name: BackendLoadBalancerDNS
+  BackendServiceURL:
+    Description: URL of the backend service
+    Value: !Sub http://${LoadBalancer.DNSName}:5000
+    Export:
+      Name: BackendServiceURL

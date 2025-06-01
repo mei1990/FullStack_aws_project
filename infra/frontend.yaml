@@ -1,0 +1,332 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: ECS Fargate service for frontend
+
+# Parameters section removed
+
+Resources:
+  # Frontend Security Group
+  FrontendSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for frontend service
+      VpcId:
+        Fn::ImportValue: VPCAID
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0  # Allow ALB to reach the tasks
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 203.12.12.243/32
+      Tags:
+        - Key: Name
+          Value: Frontend-SG
+        - Key: Application
+          Value: FullStack
+
+  # ECS Cluster
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: frontend-cluster
+
+  # Log Group for Container Logs
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/frontend
+      RetentionInDays: 30
+
+  # Task Execution Role
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+        
+  # Task Role - For container runtime permissions
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      # Add specific permissions your container needs at runtime
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMReadOnlyAccess  # Example for reading parameters
+
+  # Task Definition
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: frontend-task
+      Cpu: '256'
+      Memory: '512'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: frontend-container
+          Image: 588738606436.dkr.ecr.ap-southeast-2.amazonaws.com/frontend_app:latest
+          Essential: true
+          PortMappings:
+            - ContainerPort: 80
+              HostPort: 80
+              Protocol: tcp
+          Environment:
+            - Name: NODE_ENV
+              Value: production
+            # Temporarily removed backend dependency
+            # - Name: API_ENDPOINT
+            #   Value: !ImportValue BackendServiceURL
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: frontend
+
+  # Load Balancer
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: frontend-lb
+      Scheme: internet-facing
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: '60'
+      Subnets:
+        - Fn::ImportValue: PublicSubnet1
+        - Fn::ImportValue: PublicSubnet2
+      SecurityGroups:
+        - !Ref FrontendSecurityGroup
+
+  # Target Group
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: frontend-tg
+      Port: 80
+      Protocol: HTTP
+      TargetType: ip
+      VpcId:
+        Fn::ImportValue: VPCAID
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      HealthCheckEnabled: true
+      Matcher:
+        HttpCode: 200-399  # Accept a wider range of success codes
+
+  # Listener
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+  # ECS Service
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: Listener
+    Properties:
+      ServiceName: frontend-service
+      Cluster: !Ref ECSCluster
+      LaunchType: FARGATE
+      DesiredCount: 1
+      TaskDefinition: !Ref TaskDefinition
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - !Ref FrontendSecurityGroup
+          Subnets:
+            - Fn::ImportValue: PublicSubnet1
+            - Fn::ImportValue: PublicSubnet2
+      LoadBalancers:
+        - ContainerName: frontend-container
+          ContainerPort: 80
+          TargetGroupArn: !Ref TargetGroup
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+      HealthCheckGracePeriodSeconds: 60
+      # Enable service discovery if needed
+      # ServiceRegistries:
+      #   - RegistryArn: !GetAtt ServiceDiscoveryService.Arn
+      #     Port: 80
+      
+  # Auto Scaling for the ECS Service
+  ScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: 2
+      MinCapacity: 1
+      ResourceId: !Join 
+        - '/'
+        - - service
+          - !Ref ECSCluster
+          - !GetAtt Service.Name
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+      RoleARN: !Sub arn:aws:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService
+      
+  # CPU Scaling Policy
+  CPUScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: CPUScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        TargetValue: 70.0
+        ScaleInCooldown: 300
+        ScaleOutCooldown: 60
+
+  # WAF Web ACL for ALB (Regional)
+  WebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: FrontendWebACL
+      Scope: REGIONAL
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: FrontendWebACL
+      Rules:
+        - Name: AWSManagedRulesCommonRuleSet
+          Priority: 0
+          OverrideAction:
+            None: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: AWSManagedRulesCommonRuleSet
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+        - Name: RateLimitRule
+          Priority: 1
+          Action:
+            Block: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: RateLimitRule
+          Statement:
+            RateBasedStatement:
+              Limit: 1000
+              AggregateKeyType: IP
+
+  # ALB WAF Association
+  WebACLAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Properties:
+      ResourceArn: !Ref LoadBalancer
+      WebACLArn: !GetAtt WebACL.Arn
+
+
+
+  # Certificate and validation resources removed
+      
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        IPV6Enabled: true
+        HttpVersion: http2
+        PriceClass: PriceClass_100
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+        Origins:
+          - Id: ALBOrigin
+            DomainName: !GetAtt LoadBalancer.DNSName
+            CustomOriginConfig:
+              HTTPPort: 80
+              HTTPSPort: 443
+              OriginProtocolPolicy: http-only
+              OriginReadTimeout: 60
+              OriginKeepaliveTimeout: 5
+        DefaultCacheBehavior:
+          TargetOriginId: ALBOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+            - PUT
+            - POST
+            - PATCH
+            - DELETE
+          CachedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          ForwardedValues:
+            QueryString: true
+            Cookies:
+              Forward: all
+            Headers:
+              - '*'
+          Compress: true
+          DefaultTTL: 0
+          MinTTL: 0
+          MaxTTL: 0
+        # WebACLId: !GetAtt WebACL.Arn  # Commented out until global WAF is created
+
+  # Route 53 and certificate configuration removed
+
+Outputs:
+  FrontendSGID:
+    Description: ID of Frontend Security Group
+    Value: !Ref FrontendSecurityGroup
+    Export:
+      Name: FrontendSG
+  LoadBalancerDNS:
+    Description: DNS name of the load balancer
+    Value: !GetAtt LoadBalancer.DNSName
+    Export:
+      Name: FrontendLoadBalancerDNS
+  CloudFrontDomainName:
+    Description: Domain name of the CloudFront distribution
+    Value: !GetAtt CloudFrontDistribution.DomainName
+    Export:
+      Name: FrontendCloudFrontDomain
+  CloudFrontURL:
+    Description: URL of the frontend service via CloudFront
+    Value: !Sub https://${CloudFrontDistribution.DomainName}
+    Export:
+      Name: FrontendCloudFrontURL
+  ServiceURL:
+    Description: URL of the frontend service via ALB (direct)
+    Value: !Sub http://${LoadBalancer.DNSName}
+    Export:
+      Name: FrontendServiceURL
+  # Domain-related outputs removed
